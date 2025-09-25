@@ -262,6 +262,220 @@ app.get('/api/emails/:accountId', async (req, res) => {
 /**
  * GET /api/emails/:accountId/:emailId - Get specific email by ID with full decoding
  */
+
+// ============= EMAIL STATUS UPDATE ENDPOINTS =============
+
+/**
+ * PATCH /api/emails/:accountId/:emailId/read - Mark email as read/unread
+ */
+app.patch('/api/emails/:accountId/:emailId/read', async (req, res) => {
+    try {
+        const { accountId, emailId } = req.params;
+        const { isRead = true } = req.body || {}; // FIXED: Handle undefined req.body
+        
+        // FIXED: Validate req.body exists
+        if (!req.body || typeof req.body !== 'object') {
+            return res.status(400).json({
+                success: false,
+                message: '❌ Missing request body',
+                example: {
+                    isRead: true
+                },
+                received: req.body,
+                timestamp: new Date().toISOString()
+            });
+        }
+        
+        console.log(`📧 ${isRead ? 'Marking' : 'Unmarking'} email ${emailId.substring(0, 10)}... as read for account ${accountId.substring(0, 10)}...`);
+        
+        const result = await emailService.updateEmailReadStatus(emailId, accountId, isRead);
+        
+        res.json({
+            success: true,
+            message: `✅ Email successfully marked as ${isRead ? 'read' : 'unread'}!`,
+            data: {
+                emailId: emailId,
+                accountId: accountId,
+                isRead: isRead,
+                updatedAt: new Date().toISOString()
+            },
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        console.error(`❌ Mark email as read/unread failed:`, error.message);
+        const requestedIsRead = req.body?.isRead ?? true; // FIXED: Safe access
+        res.status(500).json({
+            success: false,
+            message: `❌ Failed to mark email as ${requestedIsRead ? 'read' : 'unread'}`,
+            error: error.message,
+            emailId: req.params.emailId,
+            accountId: req.params.accountId,
+            troubleshooting: [
+                'Check if the email ID exists',
+                'Verify account has permission to modify emails',
+                'Ensure Unipile API supports read status updates',
+                'Check if request body contains isRead boolean'
+            ],
+            timestamp: new Date().toISOString()
+        });
+    }
+});
+/**
+ * PATCH /api/emails/:accountId/bulk/read - Bulk mark emails as read/unread
+ */
+app.patch('/api/emails/:accountId/bulk/read', async (req, res) => {
+    try {
+        const { accountId } = req.params;
+        const { emailIds, isRead = true } = req.body;
+        
+        if (!emailIds || !Array.isArray(emailIds) || emailIds.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: '❌ Missing or invalid emailIds array',
+                example: {
+                    emailIds: ["email1_id", "email2_id", "email3_id"],
+                    isRead: true
+                },
+                timestamp: new Date().toISOString()
+            });
+        }
+        
+        console.log(`📧 Bulk ${isRead ? 'marking' : 'unmarking'} ${emailIds.length} emails as read for account ${accountId.substring(0, 10)}...`);
+        
+        const results = [];
+        const errors = [];
+        
+        for (const emailId of emailIds) {
+            try {
+                await emailService.updateEmailReadStatus(emailId, accountId, isRead);
+                results.push({
+                    emailId: emailId,
+                    status: 'success',
+                    isRead: isRead
+                });
+            } catch (error) {
+                console.error(`❌ Failed to update ${emailId}:`, error.message);
+                errors.push({
+                    emailId: emailId,
+                    status: 'failed',
+                    error: error.message
+                });
+            }
+            
+            // Small delay to avoid rate limiting
+            await new Promise(resolve => setTimeout(resolve, 100));
+        }
+        
+        const successCount = results.length;
+        const failureCount = errors.length;
+        
+        res.json({
+            success: true,
+            message: `📧 Bulk update completed: ${successCount} updated, ${failureCount} failed`,
+            data: {
+                summary: {
+                    totalEmails: emailIds.length,
+                    successful: successCount,
+                    failed: failureCount,
+                    isRead: isRead
+                },
+                results: results,
+                errors: errors
+            },
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        console.error('❌ Bulk email update failed:', error.message);
+        res.status(500).json({
+            success: false,
+            message: '❌ Failed to bulk update emails',
+            error: error.message,
+            timestamp: new Date().toISOString()
+        });
+    }
+});
+
+/**
+ * PATCH /api/emails/:accountId/mark-all-read - Mark all emails in folder as read
+ */
+app.patch('/api/emails/:accountId/mark-all-read', async (req, res) => {
+    try {
+        const { accountId } = req.params;
+        const { folderId = 'INBOX', limit = 100 } = req.body;
+        
+        console.log(`📧 Marking all emails as read in folder ${folderId} for account ${accountId.substring(0, 10)}...`);
+        
+        // First, get all unread emails in the folder
+        const unreadEmails = await emailService.getAllEmails(accountId, {
+            folderId: folderId,
+            isRead: false,
+            limit: limit
+        });
+        
+        if (!unreadEmails.emails || unreadEmails.emails.length === 0) {
+            return res.json({
+                success: true,
+                message: '📧 No unread emails found to mark as read',
+                data: {
+                    totalProcessed: 0,
+                    folderId: folderId
+                },
+                timestamp: new Date().toISOString()
+            });
+        }
+        
+        const emailIds = unreadEmails.emails.map(email => email.id);
+        const results = [];
+        const errors = [];
+        
+        for (const emailId of emailIds) {
+            try {
+                await emailService.updateEmailReadStatus(emailId, accountId, true);
+                results.push({
+                    emailId: emailId,
+                    status: 'marked_as_read'
+                });
+            } catch (error) {
+                console.error(`❌ Failed to mark ${emailId} as read:`, error.message);
+                errors.push({
+                    emailId: emailId,
+                    status: 'failed',
+                    error: error.message
+                });
+            }
+            
+            // Small delay to avoid rate limiting
+            await new Promise(resolve => setTimeout(resolve, 150));
+        }
+        
+        res.json({
+            success: true,
+            message: `✅ Marked ${results.length} emails as read in folder ${folderId}`,
+            data: {
+                totalProcessed: emailIds.length,
+                successful: results.length,
+                failed: errors.length,
+                folderId: folderId,
+                results: results,
+                errors: errors
+            },
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        console.error('❌ Mark all as read failed:', error.message);
+        res.status(500).json({
+            success: false,
+            message: '❌ Failed to mark all emails as read',
+            error: error.message,
+            timestamp: new Date().toISOString()
+        });
+    }
+});
+
+
+
+
+
 app.get('/api/emails/:accountId/:emailId', async (req, res) => {
     try {
         const { accountId, emailId } = req.params;

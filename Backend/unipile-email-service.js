@@ -421,6 +421,38 @@ export class UnipileEmailService {
         }
     }
 
+    
+async updateEmailReadStatus(emailId, accountId, isRead = true) {
+    try {
+        console.log(`🔄 Updating email ${emailId} read status to: ${isRead}`);
+        
+        // FIXED: Use PUT instead of PATCH and correct payload structure
+        const response = await axios.put(
+            `${this.baseUrl}${this.apiVersion}/emails/${emailId}`,
+            {
+                account_id: accountId,
+                is_read: isRead
+            },
+            {
+                headers: this.getHeaders()
+            }
+        );
+        
+        return {
+            success: true,
+            emailId: emailId,
+            isRead: isRead,
+            updatedAt: new Date().toISOString(),
+            apiResponse: response.data
+        };
+    } catch (error) {
+        console.error(`❌ Update email read status failed:`, error.response?.data || error.message);
+        throw new Error(`Failed to update email read status: ${error.response?.data?.message || error.message}`);
+    }
+}
+
+
+
 async sendEmail(accountId, to, subject, body, options = {}) {
     try {
         // FIXED: Convert recipients to Unipile's expected format
